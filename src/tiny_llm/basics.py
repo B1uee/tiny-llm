@@ -4,6 +4,7 @@ import math
 
 def softmax(x: mx.array, axis: int) -> mx.array:
     # TODO: manual implementation
+
     return mx.softmax(x, axis=axis)
 
 
@@ -12,7 +13,8 @@ def linear(
     w: mx.array,
     bias: mx.array | None = None,
 ) -> mx.array:
-    pass
+    # x: N * I, w: O * I, bias: O
+    return mx.matmul(x, w.T) + (bias if bias is not None else 0)
 
 
 def silu(x: mx.array) -> mx.array:
