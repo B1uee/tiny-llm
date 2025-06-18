@@ -18,4 +18,8 @@ def linear(
 
 
 def silu(x: mx.array) -> mx.array:
-    pass
+    """
+        it takes a tensor of the shape N.. x I and returns a tensor of the same shape. 
+        SiLU(x) = x * sigmoid(x) = x / (1 + exp(-x))
+    """
+    return x / (1 + mx.exp(-x))
