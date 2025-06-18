@@ -24,7 +24,30 @@ class Qwen2MultiHeadAttention:
         max_seq_len: int = 32768,
         theta: int = 1000000,
     ):
-        pass
+        """
+            x: B, L, E
+            wq: E x (H_q x D)
+            wk: E x (H x D)
+            wv: E x (H x D)
+            wo: (H_q x D) x E
+            q = linear(x, wq, bq) -> B, L, H_q, D
+            k = linear(x, wk, bk) -> B, L, H, D
+            v = linear(x, wv, bv) -> B, L, H, D
+            q = rope(q, offset=slice(offset, offset + L))
+            k = rope(k, offset=slice(offset, offset + L))
+            (transpose as needed)
+            x = scaled_dot_product_attention_grouped(q, k, v, scale, mask) -> B, L, H_q, D ; Do this at float32 precision
+            (transpose as needed)
+            x = linear(x, wo) -> B, L, E
+        """
+        self.wq = wq, self.wk = wk, self.wv = wv, self.wo = wo
+        self.bq = bq, self.bk = bk, self.bv = bv
+        self.hidden_size = hidden_size
+        self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads
+        assert hidden_size % num_heads == 0
+        self.head_dim = hidden_size // num_heads
+
 
     def __call__(
         self,
@@ -32,7 +55,31 @@ class Qwen2MultiHeadAttention:
         offset: int,
         mask: mx.array | str | None = None,
     ) -> mx.array:
-        pass
+        # 计算过程中用到head_num的地方，一直是以query的为主，
+        # key和value的head_num_kv会被广播机制同query对齐
+        B, L, E = x.shape
+        
+        q = linear(x, self.wq, self.bq).reshape(-1, -1, self.num_heads, self.head_dim)       # B, L, H_q, D
+        k = linear(x, self.wk, self.bk).reshape(-1, -1, self.num_kv_heads, self.head_dim)    # B, L, H, D
+        v = linear(x, self.wv, self.bv).reshape(-1, -1, self.num_kv_heads, self.head_dim).swapaxes(1, 2)  # B, H, L, D
+        q = RoPE(q, offset=slice(offset, offset + L)).swapaxes(1, 2)  # B, H_q, L, D 
+        k = RoPE(k, offset=slice(offset, offset + L)).swapaxes(1, 2)  # B, H, L, D
+
+        # out的输入输出: B, H_q, L, D
+        out = scaled_dot_product_attention_grouped( 
+            q.astype(mx.float32),
+            k.astype(mx.float32),
+            v.astype(mx.float32),
+            scale=mx.rsqrt(self.head_dim),
+            mask=mask
+        ).astype(x.dtype)
+
+        # B, H_q, L, D
+        out = linear(
+            out.swapaxes(1, 2).reshape(B, L, self.hidden_size),
+            self.wo,
+        )
+        return out
 
 
 class Qwen2MLP:

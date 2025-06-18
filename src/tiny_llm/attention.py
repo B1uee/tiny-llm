@@ -83,8 +83,21 @@ class SimpleMultiHeadAttention:
         return o
 
 def causal_mask(L: int, S: int, dtype: mx.Dtype) -> mx.array:
-    pass
-
+    """
+        The causal mask is a square matrix of shape (L, S), 
+        where L is the query sequence length and S is the key/value sequence length. 
+        For example, if L = 3 and S = 5, the mask will be:
+        0   0   0   -inf -inf
+        0   0   0   0    -inf
+        0   0   0   0    0
+        
+    """
+    # mask = mx.full((L, S), -mx.inf, dtype=dtype)
+    # for i in range(L):
+    #     mask[i, : max(S-L+i+1, 0)] = 0
+    mask = mx.tril(mx.ones((L, S)), k=(S - L)) # 更简单，不用人为考虑边界关系
+    mask = mx.where(mask, 0, -mx.inf) # 将1的位置设为0，0的位置设为-inf
+    return mask
 
 def scaled_dot_product_attention_grouped(
     query: mx.array,
@@ -93,7 +106,53 @@ def scaled_dot_product_attention_grouped(
     scale: float | None = None,
     mask: mx.array | str | None = None,
 ) -> mx.array:
-    pass
+    '''
+        N.. is zero or more dimensions for batches
+        H_q is the number of query heads
+        H is the number of key/value heads (H_q must be divisible by H)
+        L is the query sequence length
+        S is the key/value sequence length
+        D is the head dimension
+        query: N.. x H_q x L x D
+        key: N.. x H x S x D
+        value: N.. x H x S x D
+        mask: N.. x H_q x L x S
+        output: N.. x H_q x L x D
+
+        Please note that besides the grouped heads, we also extend the implementation that Q, K, and V 
+        might not have the same sequence length.
+        Consider adding a dimension of size 1 for n_repeats in the key and value tensors to enable broadcasting. 
+        At last, don't forget to reshape the final result back to the expected output shape.
+    '''
+    factor = mx.rsqrt(query.shape[-1]) if scale is None else scale
+    expected_shape = query.shape
+
+    H_q, L, D = query.shape[-3:]
+    H, S, _ = key.shape[-3:]
+    assert H_q % H == 0
+    n_repeats = H_q // H
+
+    # 通过给query和key添加一个维度来实现广播
+    query = query.reshape(-1, H, n_repeats, L, D)
+    key = key.reshape(-1, H, 1, S, D)
+    value = value.reshape(-1, H, 1, S, D)
+
+    scores = mx.matmul(query, key.swapaxes(-2, -1)) * factor # (N.., H, n_repeats, L, S)
+    
+    if mask is not None:
+        if mask == "causal":
+            mask = causal_mask(L, S, scores.dtype).reshape(1,1,1,L,S)
+            scores += mask
+        else:
+            scores += mask.reshape(scores.shape)
+          
+    
+    weights = softmax(scores, axis=-1)
+    # Compute the final attention output.
+    output = mx.matmul(weights, value)  # (N.., H, n_repeats, L, D)
+
+    return output.reshape(expected_shape)  # Reshape back to the expected output shape
+
 
 
 def flash_attention(
